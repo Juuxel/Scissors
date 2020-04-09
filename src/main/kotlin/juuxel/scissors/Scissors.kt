@@ -8,7 +8,9 @@ import net.fabricmc.stitch.commands.tinyv2.TinyClass
 import net.fabricmc.stitch.commands.tinyv2.TinyField
 import net.fabricmc.stitch.commands.tinyv2.TinyFile
 import net.fabricmc.stitch.commands.tinyv2.TinyHeader
+import net.fabricmc.stitch.commands.tinyv2.TinyLocalVariable
 import net.fabricmc.stitch.commands.tinyv2.TinyMethod
+import net.fabricmc.stitch.commands.tinyv2.TinyMethodParameter
 import net.fabricmc.stitch.commands.tinyv2.TinyV2Reader
 import net.fabricmc.stitch.commands.tinyv2.TinyV2Writer
 import picocli.CommandLine
@@ -42,6 +44,9 @@ class Scissors : Runnable {
     @CommandLine.Option(names = ["--output-format"])
     private var outputFormat: String = DEFAULT_FORMAT
 
+    @CommandLine.Option(names = ["--keep-temporary-files"])
+    private var keepTemp: Boolean = false
+
     override fun run() {
         val saveParams = MappingSaveParameters(MappingFileNameFormat.BY_DEOBF)
         println("Parsing inputs...")
@@ -51,8 +56,10 @@ class Scissors : Runnable {
         val intermediaryA = Files.createTempFile(null, ".tiny")
         val intermediaryB = Files.createTempFile(null, ".tiny")
 
-        intermediaryA.toFile().deleteOnExit()
-        intermediaryB.toFile().deleteOnExit()
+        if (!keepTemp) {
+            intermediaryA.toFile().deleteOnExit()
+            intermediaryB.toFile().deleteOnExit()
+        }
 
         println("Converting to tiny...")
         MappingCommandsUtil.write(mappingsA, "tinyv2:intermediary:named", intermediaryA, saveParams)
@@ -68,13 +75,25 @@ class Scissors : Runnable {
         println("Scanning...")
         for (it in tinyA.classEntries) {
             var shouldMakeClass = false
+            var shouldNameClass = false
             val methods: MutableList<TinyMethod> = ArrayList()
             val fields: MutableList<TinyField> = ArrayList()
 
-            val otherClass = classesB[it.classNames[0]] ?: continue
+            val otherClass = classesB[it.classNames[0]]
+
+            if (otherClass == null) {
+                outputClasses += it
+                continue
+            }
+
             if (it.classNames[1] != otherClass.classNames[1]) {
-                println("Adding ${it.classNames[1]}")
                 shouldMakeClass = true
+                shouldNameClass = true
+            }
+
+            if (it.comments != otherClass.comments) {
+                shouldMakeClass = true
+                shouldNameClass = true
             }
 
             val selfMethods = it.mapMethodsByFirstNamespaceAndDescriptor()
@@ -83,33 +102,89 @@ class Scissors : Runnable {
             val otherFields = otherClass.mapFieldsByFirstNamespace()
 
             for ((name, field) in selfFields) {
-                val otherField = otherFields[name] ?: continue
-                if (field.fieldNames[1] != otherField.fieldNames[1]) {
-                    println("Adding ${it.classNames[1]}.${field.fieldNames[1]}")
+                val otherField = otherFields[name]
+                if (otherField == null || field.fieldNames[1] != otherField.fieldNames[1] || field.comments != otherField.comments) {
                     fields += field
                     shouldMakeClass = true
                 }
             }
 
             for ((desc, method) in selfMethods) {
-                val otherMethod = otherMethods[desc] ?: continue
-                if (method.methodNames[1] != otherMethod.methodNames[1]) {
-                    println("Adding ${it.classNames[1]}.${method.methodNames[1]}")
+                var shouldMakeMethod = false
+                var shouldNameMethod = false
+                val params: MutableSet<TinyMethodParameter> = HashSet()
+                val variables: MutableSet<TinyLocalVariable> = HashSet()
+                val otherMethod = otherMethods[desc]
+
+                if (otherMethod == null) {
                     methods += method
+                    shouldMakeClass = true
+                    continue
+                }
+
+                if (method.methodNames[1] != otherMethod.methodNames[1]) {
+                    shouldMakeMethod = true
+                    shouldNameMethod = true
+                }
+
+                for (param in method.parameters) {
+                    val otherParam = otherMethod.parameters.find { it.lvIndex == param.lvIndex }
+                    if (param.parameterNames[1] != otherParam?.parameterNames?.get(1)) {
+                        shouldMakeMethod = true
+                        params += param
+                    }
+                }
+
+                for (variable in method.localVariables) {
+                    val otherVariable = otherMethod.localVariables.find { it.lvIndex == variable.lvIndex }
+                    if (variable.localVariableNames[1] != otherVariable?.localVariableNames?.get(1)) {
+                        shouldMakeMethod = true
+                        variables += variable
+                    }
+                }
+
+                if (method.comments != otherMethod.comments) {
+                    shouldMakeMethod = true
+                    shouldNameMethod = true
+                }
+
+                if (shouldMakeMethod) {
+                    val methodNames =
+                        if (shouldNameMethod) method.methodNames
+                        else listOf(method.methodNames.first())
+
+                    methods += TinyMethod(
+                        method.methodDescriptorInFirstNamespace,
+                        methodNames,
+                        params,
+                        variables,
+                        if (shouldNameMethod) method.comments else emptyList()
+                    )
                     shouldMakeClass = true
                 }
             }
 
             if (shouldMakeClass) {
-                outputClasses += TinyClass(it.classNames, methods, fields, emptyList())
+                val classNames =
+                    if (shouldNameClass) it.classNames
+                    else listOf(it.classNames.first())
+
+                outputClasses += TinyClass(
+                    classNames,
+                    methods,
+                    fields,
+                    if (shouldNameClass) it.comments else emptyList()
+                )
             }
         }
 
         val outputHeader = TinyHeader(listOf(sharedNamespace, differentNamespace), 2, 0, emptyMap())
         val outputTiny = TinyFile(outputHeader, outputClasses)
         val intermediaryOutput = Files.createTempFile(null, ".tiny")
-        intermediaryOutput.toFile().deleteOnExit()
-        println(intermediaryOutput.toAbsolutePath())
+
+        if (!keepTemp) {
+            intermediaryOutput.toFile().deleteOnExit()
+        }
 
         TinyV2Writer.write(outputTiny, intermediaryOutput)
         ConvertMappingsCommand().run("tinyv2", intermediaryOutput.toString(), outputFormat, output.toString())
