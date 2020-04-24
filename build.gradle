@@ -5,7 +5,7 @@ plugins {
 }
 
 group = 'io.github.juuxel'
-version = '1.0.8'
+version = '1.0.9'
 
 sourceCompatibility = 1.8
 
@@ -28,7 +28,7 @@ jar {
 dependencies {
     implementation "org.jetbrains.kotlin:kotlin-stdlib-jdk8"
     implementation "info.picocli:picocli:4.2.0"
-    implementation "cuchaz:enigma:0.15.153:lib"
+    implementation("cuchaz:enigma:0.15.3+build.166:lib") { force = true }
     implementation "net.fabricmc:stitch:0.4.5+build.73"
 }
 

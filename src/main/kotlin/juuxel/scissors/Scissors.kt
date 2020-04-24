@@ -70,7 +70,7 @@ class Scissors : Runnable {
         val tinyB = TinyV2Reader.read(intermediaryB)
         val classesB = tinyB.mapClassesByFirstNamespace()
 
-        val outputClasses: MutableList<TinyClass> = ArrayList()
+        val outputClasses: MutableSet<TinyClass> = HashSet()
 
         println("Scanning...")
         for (it in tinyA.classEntries) {
@@ -169,12 +169,34 @@ class Scissors : Runnable {
                     if (shouldNameClass) it.classNames
                     else listOf(it.classNames.first())
 
+                // Remove existing entries (dummy nested class parents)
+                outputClasses.removeIf { c -> c.classNames[0] == it.classNames[0] }
+
                 outputClasses += TinyClass(
                     classNames,
                     methods,
                     fields,
                     if (shouldNameClass) it.comments else emptyList()
                 )
+
+                if ('$' in it.classNames[0]) { // nested class
+                    val parentNames = it.classNames[0].split('$').dropLast(1)
+                    var parentName = ""
+
+                    for (component in parentNames) {
+                        if (parentName.isNotEmpty()) parentName += '$'
+                        parentName += component
+                        if (outputClasses.none { c -> c.classNames[0] == parentName }) {
+                            val parentEntry = classesB[parentName] ?: continue
+                            outputClasses += TinyClass(
+                                parentEntry.classNames,
+                                emptyList(),
+                                emptyList(),
+                                emptyList()
+                            )
+                        }
+                    }
+                }
             }
         }
 
